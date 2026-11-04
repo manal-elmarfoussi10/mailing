@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Mailing</title>
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside>
+      <a class="brand" href="#/">
+        <svg class="mark" viewBox="0 0 32 32" aria-hidden="true">
+          <rect x="3" y="7" width="26" height="18" rx="2" fill="none" stroke="currentColor" stroke-width="2"/>
+          <path d="M4 9l12 9 12-9" fill="none" stroke="currentColor" stroke-width="2"/>
+        </svg>
+        <span>Mailing</span>
+      </a>
+      <p id="side-status" class="side-status">Idle</p>
+      <p class="side-revenue">Today <strong id="today-revenue">0</strong></p>
+      <nav>
+        <a class="nav-link" data-nav="overview" href="#/">Overview</a>
+        <a class="nav-link" data-nav="mailboxes" href="#/mailboxes">Mailboxes</a>
+        <a class="nav-link" data-nav="campaigns" href="#/campaigns">Campaigns</a>
+        <a class="nav-link" data-nav="subscribers" href="#/subscribers">Subscribers</a>
+        <a class="nav-link" data-nav="queues" href="#/queues">Queues</a>
+        <a class="nav-link" data-nav="deliverability" href="#/deliverability">Deliverability</a>
+        <a class="nav-link" data-nav="media" href="#/media">Media</a>
+        <a class="nav-link" data-nav="offers" href="#/offers">Offers</a>
+        <a class="nav-link" data-nav="settings" href="#/settings">Settings</a>
+        <a class="nav-link" data-nav="activity" href="#/activity">Activity</a>
+      </nav>
+    </aside>
+
+    <main>
+      <section data-page="overview" class="page">
+        <header class="page-head">
+          <div>
+            <p class="kicker">Control room</p>
+            <h1>Overview</h1>
+          </div>
+          <p id="overview-clock" class="muted"></p>
+        </header>
+        <div class="stats">
+          <article class="stat">
+            <div class="kicker">Remaining today</div>
+            <div id="stat-remaining" class="stat-value">—</div>
+            <div id="stat-remaining-detail" class="muted">Not checked yet</div>
+          </article>
+          <article class="stat">
+            <div class="kicker">Mailboxes on</div>
+            <div id="stat-enabled" class="stat-value">0</div>
+            <div id="stat-enabled-detail" class="muted">None added</div>
+          </article>
+          <article class="stat">
+            <div class="kicker">Queued</div>
+            <div id="stat-queued" class="stat-value">0</div>
+            <div id="stat-queued-detail" class="muted">Waiting to send</div>
+          </article>
+          <article class="stat">
+            <div class="kicker">Sent</div>
+            <div id="stat-sent" class="stat-value">0</div>
+            <div id="stat-sent-detail" class="muted">Through this app</div>
+          </article>
+          <article class="stat">
+            <div class="kicker">Failed</div>
+            <div id="stat-failed" class="stat-value">0</div>
+            <div class="muted">Skipped, ready to retry</div>
+          </article>
+          <article class="stat">
+            <div class="kicker">Campaigns</div>
+            <div id="stat-campaigns" class="stat-value">0</div>
+            <div id="stat-campaigns-detail" class="muted">None yet</div>
+          </article>
+        </div>
+        <section id="run-bar" class="run-bar" hidden>
+          <div>
+            <span id="run-pill" class="pill">Live</span>
+            <strong id="run-name"></strong>
+            <div id="run-phase" class="muted"></div>
+          </div>
+          <div class="row">
+            <button type="button" id="overview-pause">Pause</button>
+            <button type="button" id="overview-resume" class="ghost">Resume</button>
+            <a id="run-open" class="text-link" href="#/campaigns">Open</a>
+          </div>
+        </section>
+        <div class="dash-grid">
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Queue mix</h2>
+              <a class="quiet" href="#/campaigns">All campaigns</a>
+            </div>
+            <div class="donut-wrap">
+              <div id="donut" class="donut" role="img" aria-label="Sent, queued, and failed">
+                <div id="donut-center" class="donut-center">0</div>
+              </div>
+              <ul id="donut-legend" class="legend"></ul>
+            </div>
+            <p class="hint">Sent, still queued, and failed across every campaign.</p>
+          </section>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Capacity</h2>
+              <a class="quiet" href="#/mailboxes">Manage mailboxes</a>
+            </div>
+            <div id="quota-bars" class="stack"></div>
+            <p class="hint">The filled part is what is still left today. The pale part is the rest of that account’s daily allowance.</p>
+          </section>
+        </div>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Campaign control</h2>
+            <a class="quiet" href="#/campaigns">Open the list</a>
+          </div>
+          <div class="table-wrap flat">
+            <table>
+              <thead>
+                <tr><th>Name</th><th>Status</th><th>Phase</th><th>Queued</th><th>Sent</th><th>Failed</th><th></th></tr>
+              </thead>
+              <tbody id="overview-campaign-table"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Mailbox control</h2>
+            <a class="quiet" href="#/mailboxes">Add a mailbox</a>
+          </div>
+          <div class="table-wrap flat">
+            <table>
+              <thead>
+                <tr><th>Name</th><th>Account</th><th>State</th><th>Left today</th><th>Allowance</th><th>Note</th><th></th></tr>
+              </thead>
+              <tbody id="overview-mailbox-table"></tbody>
+            </table>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Recent activity</h2>
+            <a class="quiet" href="#/activity">Full log</a>
+          </div>
+          <div id="overview-log" class="feed"></div>
+          <p id="overview-empty" class="hint">Add a mailbox or a campaign to see this fill in.</p>
+        </section>
+      </section>
+
+      <section data-page="mailboxes" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Mailboxes</h1>
+            <p class="muted">Paste the web app URL and secret. Saving checks the script and stores the email and quota it returns.</p>
+          </div>
+          <button type="button" id="refresh-all" class="ghost">Refresh quotas</button>
+        </header>
+        <div class="panel stack">
+          <div class="row">
+            <label class="grow">Search<input id="mailbox-search" placeholder="Email, status, or server"></label>
+          </div>
+          <div class="row">
+            <select id="bulk-action">
+              <option value="link">Link to server</option>
+              <option value="status">Change status</option>
+              <option value="delete">Delete</option>
+              <option value="refresh">Refresh quota</option>
+            </select>
+            <input id="bulk-server" list="server-names" placeholder="SRV-01">
+            <select id="bulk-status">
+              <option value="1">Active</option>
+              <option value="0">Disabled</option>
+            </select>
+            <button type="button" id="bulk-apply">Apply</button>
+            <span id="bulk-note" class="muted"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><input type="checkbox" id="mailbox-all"></th>
+                  <th>Email</th><th>Server</th><th>User</th><th>Quota</th><th>Status</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="mailbox-list"></tbody>
+            </table>
+          </div>
+          <p id="mailbox-empty" class="hint">No mailboxes yet.</p>
+          <div class="row">
+            <button type="button" id="mailbox-prev" class="ghost">Previous</button>
+            <span id="mailbox-page" class="muted"></span>
+            <button type="button" id="mailbox-next" class="ghost">Next</button>
+          </div>
+        </div>
+        <div class="split">
+          <form id="mailbox-form" class="panel stack">
+            <h2 id="mailbox-form-title">Add mailbox</h2>
+            <input type="hidden" name="id">
+            <label>User<input name="owner_name" placeholder="Admin"></label>
+            <label>Server<input name="server_name" list="server-names" placeholder="SRV-01"></label>
+            <label>Email<input name="account_email" placeholder="you@gmail.com"></label>
+            <label>Status
+              <select name="enabled">
+                <option value="1">Active</option>
+                <option value="0">Disabled</option>
+              </select>
+            </label>
+            <label>Web app URL<input name="web_app_url" placeholder="https://script.google.com/macros/s/.../exec" required></label>
+            <label>Secret<input name="token" placeholder="Same value as SECRET in the script" required></label>
+            <label>Account
+              <select name="account_kind">
+                <option value="gmail">Gmail · about 100 / day</option>
+                <option value="workspace">Google Workspace · about 1,500 / day</option>
+              </select>
+            </label>
+            <div class="row">
+              <button type="submit">Save</button>
+              <button type="button" id="mailbox-cancel" class="ghost" hidden>Cancel edit</button>
+            </div>
+          </form>
+          <div class="stack">
+            <form id="practice-form" class="panel stack">
+              <h2>Practice mailbox</h2>
+              <label>Label<input name="label" value="Practice"></label>
+              <label>Email<input name="account_email" placeholder="practice@practice.test"></label>
+              <label>User<input name="owner_name" placeholder="Admin"></label>
+              <label>Server<input name="server_name" list="server-names" placeholder="SRV-01"></label>
+              <label>Imitate
+                <select name="account_kind" id="practice-kind">
+                  <option value="gmail">Gmail · 100</option>
+                  <option value="workspace">Workspace · 1,500</option>
+                </select>
+              </label>
+              <label>Starting quota<input name="quota" type="number" min="0" max="2000" value="100"></label>
+              <label class="check"><input name="fail_once" type="checkbox"> Simulate one Google wait</label>
+              <button type="submit">Add practice mailbox</button>
+              <p class="hint">A practice mailbox does not send real email. It resets if you restart the app.</p>
+            </form>
+            <form id="server-form" class="panel stack">
+              <h2>Servers</h2>
+              <label>Name<input name="name" placeholder="SRV-01" required></label>
+              <button type="submit">Create server</button>
+              <ul id="server-list"></ul>
+            </form>
+          </div>
+        </div>
+        <form id="account-import" class="panel stack">
+          <h2>Import accounts</h2>
+          <label>CSV<textarea name="csv" rows="4" placeholder="email,web app url,secret,account type,server,user"></textarea></label>
+          <button type="submit">Import</button>
+        </form>
+        <datalist id="server-names"></datalist>
+        <details class="panel">
+          <summary>Connect a Gmail or Workspace mailbox</summary>
+          <ol>
+            <li>Sign in as that account at script.google.com, create a project, and paste <code>script/Code.gs</code>.</li>
+            <li>Project settings → Script properties → add <code>SECRET</code> with a long random string.</li>
+            <li>Deploy → New deployment → Web app. Execute as Me. Who has access: Anyone.</li>
+            <li>Paste the web app URL and the secret. Save checks the script immediately.</li>
+          </ol>
+        </details>
+      </section>
+
+      <section data-page="campaigns" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Campaigns</h1>
+            <p class="muted">Each campaign has its own message, list, and run.</p>
+          </div>
+          <button type="button" id="campaign-new">New campaign</button>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Status</th><th>Queued</th><th>Sent</th><th>Failed</th><th></th></tr>
+            </thead>
+            <tbody id="campaign-list"></tbody>
+          </table>
+        </div>
+        <p id="campaign-empty" class="hint">No campaigns yet.</p>
+      </section>
+
+      <section data-page="campaign" class="page" hidden>
+        <p id="campaign-missing" class="hint" hidden>That campaign is not here anymore.</p>
+        <div id="campaign-body">
+          <header class="page-head">
+            <div>
+              <h1 id="campaign-heading">Campaign</h1>
+              <p id="campaign-status" class="muted"></p>
+            </div>
+            <button type="button" id="campaign-delete" class="ghost">Delete</button>
+          </header>
+
+          <section class="panel">
+            <h2>Message</h2>
+            <form id="campaign-form" class="stack">
+              <label>Name<input name="name" required></label>
+              <label>Offer
+                <select name="offer_id" id="offer-select">
+                  <option value="">None</option>
+                </select>
+              </label>
+              <label>Subject<input name="subject" placeholder="Hello {{first name}}"></label>
+              <div class="split">
+                <label>From name<input name="from_name" placeholder="Ada"></label>
+                <label>Reply-to<input name="reply_to" placeholder="replies@example.com"></label>
+              </div>
+              <div class="split">
+                <label>HTML<textarea name="html_body" id="html-body" rows="8" placeholder="<p>Hi {{first name}},</p>"></textarea></label>
+                <div>
+                  <p class="muted">Preview</p>
+                  <iframe id="html-preview" class="preview" title="HTML preview"></iframe>
+                </div>
+              </div>
+              <label>Plain text<textarea name="text_body" rows="4" placeholder="Hi {{first name}},"></textarea></label>
+              <div>
+                <p class="muted">Placeholders</p>
+                <ul id="placeholder-list" class="chips"></ul>
+              </div>
+              <p class="hint">Use a column name in braces, such as {{first name}} or {{email}}. {{offer url}} becomes the selected offer’s link when the message is sent.</p>
+              <div class="row">
+                <button type="submit">Save campaign</button>
+                <span id="save-note" class="muted"></span>
+              </div>
+            </form>
+            <form id="attachment-form" class="row">
+              <label>Attachments<input name="file" type="file" multiple></label>
+              <button type="submit">Upload</button>
+            </form>
+            <ul id="attachment-list"></ul>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>People</h2>
+              <div id="counts" class="muted"></div>
+            </div>
+            <div class="split">
+              <form id="csv-form" class="stack">
+                <label>CSV file<input name="file" type="file" accept=".csv,text/csv"></label>
+                <div class="row">
+                  <button type="submit" data-replace="false">Add CSV</button>
+                  <button type="submit" data-replace="true" class="ghost">Replace unsent</button>
+                </div>
+              </form>
+              <form id="sheet-form" class="stack">
+                <label>Google Sheet URL<input name="url" placeholder="https://docs.google.com/spreadsheets/d/..."></label>
+                <div class="row">
+                  <button type="submit" data-replace="false">Add sheet</button>
+                  <button type="submit" data-replace="true" class="ghost">Replace unsent</button>
+                </div>
+                <p class="hint">Share the sheet as Anyone with the link, Viewer. It needs a column named email.</p>
+              </form>
+            </div>
+            <form id="paste-form" class="stack">
+              <label>Or paste CSV<textarea name="csv" rows="4" placeholder="email,first name&#10;ada@example.com,Ada"></textarea></label>
+              <div class="row">
+                <button type="submit">Add pasted rows</button>
+                <button type="button" id="sample-rows" class="ghost">Fill sample rows</button>
+              </div>
+            </form>
+            <div class="filters" id="filters">
+              <button type="button" data-status="all" class="on">All</button>
+              <button type="button" data-status="queued">Queued</button>
+              <button type="button" data-status="sent">Sent</button>
+              <button type="button" data-status="failed">Failed</button>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr><th>Email</th><th>Status</th><th>Tries</th><th>Mailbox</th><th>Note</th></tr>
+                </thead>
+                <tbody id="people"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <section class="panel">
+            <div class="panel-head">
+              <h2>Run</h2>
+              <strong id="phase">Idle</strong>
+            </div>
+            <form id="run-form" class="run-grid">
+              <label>Wait<input name="delay_amount" type="number" min="0" max="1440" value="1"></label>
+              <label>Unit
+                <select name="delay_unit">
+                  <option value="seconds">seconds</option>
+                  <option value="minutes">minutes</option>
+                </select>
+              </label>
+              <label>Rotation
+                <select name="rotation">
+                  <option value="drain">Fill one mailbox, then the next</option>
+                  <option value="round_robin">One email per mailbox, in turn</option>
+                </select>
+              </label>
+              <label>Automatic retries<input name="auto_retries" type="number" min="0" max="20" value="3"></label>
+              <label>Send with
+                <select name="send_with" id="send-with">
+                  <option value="mailboxes">Selected mailboxes</option>
+                  <option value="server">One server</option>
+                </select>
+              </label>
+              <label>Server<input name="server_name" list="server-names" placeholder="SRV-01"></label>
+              <div id="mailbox-picks" class="stack"></div>
+              <div class="row">
+                <button type="button" id="btn-start">Start</button>
+                <button type="button" id="btn-pause" class="ghost">Pause</button>
+                <button type="button" id="btn-resume" class="ghost">Resume</button>
+                <button type="button" id="btn-retry" class="ghost">Retry failed</button>
+              </div>
+            </form>
+            <form id="test-form" class="row">
+              <label>Test address<input name="to" placeholder="you@example.com"></label>
+              <label>Mailbox
+                <select name="mailbox_id" id="test-mailbox"></select>
+              </label>
+              <button type="submit">Test send</button>
+            </form>
+            <p id="test-result" class="hint"></p>
+            <p class="hint">There is no app-wide daily cap. A Gmail mailbox and a Workspace mailbox share one queue, and each stops when Google says that account’s quota is gone. Test send uses one mailbox and does not walk the list. Saving updates the next wait. Automatic retries run before a person is skipped. Retry failed puts those rows back in the queue.</p>
+          </section>
+        </div>
+      </section>
+
+      <section data-page="activity" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Activity</h1>
+            <p class="muted">Newest events for one campaign.</p>
+          </div>
+          <label class="inline">Campaign
+            <select id="activity-campaign"></select>
+          </label>
+        </header>
+        <div id="log" class="feed"></div>
+        <p id="activity-empty" class="hint">No events yet.</p>
+      </section>
+
+      <section data-page="subscribers" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Subscribers</h1>
+            <p class="muted">Every address already imported into a campaign.</p>
+          </div>
+          <label class="inline">Search<input id="subscriber-search" placeholder="Email"></label>
+        </header>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Email</th><th>Campaign</th><th>Status</th><th>Tries</th><th>Note</th></tr>
+            </thead>
+            <tbody id="subscriber-list"></tbody>
+          </table>
+        </div>
+        <p id="subscriber-empty" class="hint">No subscribers yet.</p>
+      </section>
+
+      <section data-page="queues" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Queues</h1>
+            <p class="muted">One campaign runs at a time.</p>
+          </div>
+        </header>
+        <div id="queue-card" class="panel stack" hidden>
+          <h2 id="queue-name"></h2>
+          <p id="queue-phase" class="muted"></p>
+          <p id="queue-counts"></p>
+          <div class="row">
+            <button type="button" id="queue-pause" class="ghost">Pause</button>
+            <button type="button" id="queue-resume" class="ghost">Resume</button>
+            <button type="button" id="queue-retry" class="ghost">Retry failed</button>
+            <a id="queue-open" class="text-link" href="#/campaigns">Open</a>
+          </div>
+        </div>
+        <p id="queue-empty" class="hint">No campaign is running or paused.</p>
+      </section>
+
+      <section data-page="deliverability" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Deliverability</h1>
+            <p class="muted">Sent, failed, quota stops, and Google-wait retries already stored on this Mac.</p>
+          </div>
+        </header>
+        <form id="report-range" class="row">
+          <label>From<input type="date" name="start"></label>
+          <label>To<input type="date" name="end"></label>
+          <button type="submit">Apply</button>
+          <span id="range-sent" class="muted"></span>
+        </form>
+        <p id="report-totals" class="muted"></p>
+        <h2>Mailboxes</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Mailbox</th><th>Sent</th><th>Failed</th></tr></thead>
+            <tbody id="report-mailboxes"></tbody>
+          </table>
+        </div>
+        <h2>Campaigns</h2>
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Campaign</th><th>Sent</th><th>Failed</th></tr></thead>
+            <tbody id="report-campaigns"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section data-page="media" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Media</h1>
+            <p class="muted">Upload an image once, copy its link into the HTML, or attach it to the open campaign.</p>
+          </div>
+        </header>
+        <form id="media-form" class="row">
+          <input name="file" type="file" accept="image/*" required>
+          <button type="submit">Upload</button>
+        </form>
+        <ul id="media-list"></ul>
+      </section>
+
+      <section data-page="offers" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Offers</h1>
+            <p class="muted">A campaign can insert {{offer url}}. Revenue stays on this Mac.</p>
+          </div>
+        </header>
+        <form id="offer-form" class="panel stack">
+          <label>Name<input name="name" required></label>
+          <label>Destination URL<input name="url" placeholder="https://example.com/offer" required></label>
+          <label>Note<input name="note"></label>
+          <button type="submit">Save offer</button>
+        </form>
+        <ul id="offer-list"></ul>
+        <form id="conversion-form" class="panel stack">
+          <h2>Add a conversion</h2>
+          <label>Offer
+            <select name="offer_id" id="conversion-offer"></select>
+          </label>
+          <label>Amount<input name="amount" type="number" min="0" step="0.01" value="10" required></label>
+          <label>Note<input name="note"></label>
+          <button type="submit">Add</button>
+        </form>
+      </section>
+
+      <section data-page="settings" class="page" hidden>
+        <header class="page-head">
+          <div>
+            <h1>Settings</h1>
+            <p class="muted">Defaults for a new campaign, and the user name on new accounts.</p>
+          </div>
+        </header>
+        <form id="settings-form" class="panel stack">
+          <label>Operator name<input name="owner_name"></label>
+          <label>Wait<input name="delay_amount" type="number" min="0" max="1440"></label>
+          <label>Unit
+            <select name="delay_unit">
+              <option value="seconds">seconds</option>
+              <option value="minutes">minutes</option>
+            </select>
+          </label>
+          <label>Rotation
+            <select name="rotation">
+              <option value="drain">Fill one mailbox, then the next</option>
+              <option value="round_robin">One email per mailbox, in turn</option>
+            </select>
+          </label>
+          <label>Automatic retries<input name="auto_retries" type="number" min="0" max="20"></label>
+          <button type="submit">Save settings</button>
+          <p id="settings-note" class="hint"></p>
+        </form>
+      </section>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
