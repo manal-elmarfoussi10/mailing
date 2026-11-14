@@ -4,6 +4,8 @@ Google answers the first POST with a redirect and drops the body if the client
 turns that POST into a GET. This client sends the JSON again on each hop.
 """
 
+import base64
+import re
 from typing import Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlparse, urlunparse
 
@@ -35,8 +37,54 @@ def quota(url: str, token: str) -> dict:
     return _call("GET", url, token, None)
 
 
-def send(url: str, token: str, payload: dict) -> dict:
-    return _call("POST", url, token, payload)
+def send(url: str, token: str, payload: dict, style: str = "app") -> dict:
+    body = _legacy_payload(payload) if style == "legacy" else payload
+    return _call("POST", url, token, body)
+
+
+def _legacy_payload(payload: dict) -> dict:
+    def packed(text: str) -> str:
+        return base64.b64encode((text or "").encode("utf-8")).decode("ascii")
+
+    html = str(payload.get("html") or "")
+    if not html.strip():
+        html = f"<p>{payload.get('text') or ''}</p>"
+    return {
+        "recipient": str(payload.get("to") or ""),
+        "subject": packed(str(payload.get("subject") or "(no subject)")),
+        "htmlBody": packed(html),
+        "fromName": packed(str(payload.get("fromName") or " ")),
+    }
+
+
+def _normalize(data: dict) -> dict:
+    if data.get("ok") is not None or data.get("code"):
+        return data
+    if "quota" in data and "result" not in data:
+        return {
+            "ok": True,
+            "code": "OK",
+            "quotaRemaining": int(data["quota"]),
+            "style": "legacy",
+        }
+    if data.get("result") == "success":
+        out = {
+            "ok": True,
+            "code": "SENT",
+            "message": str(data.get("message") or "Email sent successfully"),
+            "style": "legacy",
+        }
+        if data.get("quota") is not None:
+            out["quotaRemaining"] = int(data["quota"])
+        return out
+    if data.get("result") == "error":
+        message = str(data.get("error") or data.get("message") or "Failed to send email")
+        code = "QUOTA" if re.search(r"quota|limit exceeded|for one day", message, re.I) else "TRANSIENT"
+        out = {"ok": False, "code": code, "message": message, "style": "legacy"}
+        if data.get("quota") is not None:
+            out["quotaRemaining"] = int(data["quota"])
+        return out
+    return data
 
 
 def _call(method: str, url: str, token: str, payload: Optional[dict]) -> dict:
@@ -69,6 +117,10 @@ def _call(method: str, url: str, token: str, payload: Optional[dict]) -> dict:
                         "code": "TRANSIENT",
                         "message": f"Unexpected redirect host: {host}",
                     }
+                # Google runs the POST, then 302s to the JSON result. A second POST is rejected.
+                if method == "POST" and response.status_code in (301, 302, 303):
+                    method = "GET"
+                    body = None
                 current = nxt
                 continue
             break
@@ -94,4 +146,4 @@ def _call(method: str, url: str, token: str, payload: Optional[dict]) -> dict:
         }
     if not isinstance(data, dict):
         return {"ok": False, "code": "TRANSIENT", "message": "Script returned an unexpected payload"}
-    return data
+    return _normalize(data)

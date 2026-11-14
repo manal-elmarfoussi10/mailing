@@ -3,6 +3,7 @@ from typing import Optional
 import json
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -43,22 +44,33 @@ class Sender:
         self._pause.clear()
 
     def _run(self, campaign_id: int) -> None:
+        company_id = db.campaign_company(campaign_id)
+        if not company_id:
+            return
+        db.bind_company(company_id)
         try:
+            db.update_campaign(campaign_id, status="running", phase="Checking mailboxes", step="checking")
             self._refresh_enabled(campaign_id)
-            db.update_campaign(campaign_id, status="running", phase="Starting")
             db.add_event(campaign_id, "Started")
             while not self._stop.is_set():
                 if self._pause.is_set():
                     self._park(campaign_id)
                     if self._stop.is_set():
                         break
-                    db.update_campaign(campaign_id, status="running", phase="Resumed")
+                    db.update_campaign(campaign_id, status="running", phase="Resumed", step="next")
                 campaign = db.get_campaign(campaign_id)
                 if campaign is None:
                     return
+                db.update_campaign(campaign_id, step="next", phase="Choosing the next address")
+                if (campaign.get("rotation") or "drain") == "wave":
+                    if not self._send_wave(campaign):
+                        return
+                    if not self._sleep_delay(campaign_id):
+                        break
+                    continue
                 recipient = db.next_queued(campaign_id)
                 if recipient is None:
-                    db.update_campaign(campaign_id, status="done", phase="Finished")
+                    db.update_campaign(campaign_id, status="done", phase="Finished", step="finished")
                     db.add_event(campaign_id, "Queue finished")
                     return
                 box = self._pick_box(campaign)
@@ -66,6 +78,7 @@ class Sender:
                     db.update_campaign(
                         campaign_id,
                         status="paused",
+                        step="quota",
                         phase="All enabled mailboxes are out of quota or need a refresh. Add a box or press Refresh, then Resume.",
                     )
                     db.add_event(campaign_id, "No mailbox can send right now")
@@ -77,17 +90,20 @@ class Sender:
                     break
             current = db.get_campaign(campaign_id)
             if current and current["status"] == "running":
-                db.update_campaign(campaign_id, status="paused", phase="Stopped")
+                db.update_campaign(campaign_id, status="paused", phase="Stopped", step="paused")
         except Exception as exc:
-            db.update_campaign(campaign_id, status="paused", phase=f"Sender stopped: {exc}")
+            db.update_campaign(campaign_id, status="paused", step="error", phase=f"Sender stopped: {exc}")
             db.add_event(campaign_id, f"Sender stopped: {exc}")
+        finally:
+            db.bind_company(None)
 
     def _park(self, campaign_id: int) -> None:
         current = db.get_campaign(campaign_id)
         phase = current["phase"] if current else "Paused"
         if not str(phase).startswith("Paused") and "out of quota" not in str(phase):
             phase = "Paused"
-        db.update_campaign(campaign_id, status="paused", phase=phase)
+        step = "quota" if "out of quota" in str(phase) else "paused"
+        db.update_campaign(campaign_id, status="paused", phase=phase, step=step)
         while self._pause.is_set() and not self._stop.is_set():
             time.sleep(0.2)
 
@@ -121,6 +137,8 @@ class Sender:
             }
             if data.get("mailbox"):
                 fields["account_email"] = str(data["mailbox"])
+            if data.get("style") in {"legacy", "app"}:
+                fields["script_style"] = data["style"]
             db.update_mailbox(mailbox_id, **fields)
             return
         code = data.get("code") or "TRANSIENT"
@@ -137,7 +155,7 @@ class Sender:
             fields["quota_remaining"] = 0
         db.update_mailbox(mailbox_id, **fields)
 
-    def _pick_box(self, campaign: dict) -> Optional[dict]:
+    def _candidate_boxes(self, campaign: dict) -> list[dict]:
         boxes = [row for row in db.list_mailboxes() if row["enabled"]]
         server = str(campaign.get("server_name") or "").strip()
         if server:
@@ -146,8 +164,11 @@ class Sender:
         if chosen:
             wanted = {int(part) for part in chosen}
             boxes = [row for row in boxes if row["id"] in wanted]
+        return boxes
+
+    def _eligible_boxes(self, campaign: dict) -> list[dict]:
         eligible = []
-        for box in boxes:
+        for box in self._candidate_boxes(campaign):
             if box["skip_until_refresh"]:
                 continue
             if self._stale(box):
@@ -157,6 +178,39 @@ class Sender:
                     continue
             if box["quota_remaining"] is None or int(box["quota_remaining"]) > 0:
                 eligible.append(box)
+        return eligible
+
+    def _send_wave(self, campaign: dict) -> bool:
+        boxes = self._eligible_boxes(campaign)
+        if not boxes:
+            db.update_campaign(
+                campaign["id"],
+                status="paused",
+                step="quota",
+                phase="All enabled mailboxes are out of quota or need a refresh. Add a box or press Refresh, then Resume.",
+            )
+            db.add_event(campaign["id"], "No mailbox can send right now")
+            return False
+        people = db.take_queued(campaign["id"], len(boxes))
+        if not people:
+            db.update_campaign(campaign["id"], status="done", phase="Finished", step="finished")
+            db.add_event(campaign["id"], "Queue finished")
+            return False
+        labels = ", ".join(box["label"] for box in boxes[: len(people)])
+        db.update_campaign(
+            campaign["id"],
+            step="sending",
+            phase=f"Sending {len(people)} at once via {labels}",
+            cursor_mailbox_id=boxes[0]["id"],
+        )
+        pairs = list(zip(people, boxes))
+        with ThreadPoolExecutor(max_workers=len(pairs)) as pool:
+            list(pool.map(lambda pair: self._deliver(campaign, pair[0], pair[1]), pairs))
+        return True
+
+    def _pick_box(self, campaign: dict) -> Optional[dict]:
+        boxes = self._candidate_boxes(campaign)
+        eligible = self._eligible_boxes(campaign)
         if not eligible:
             return None
         cursor = campaign.get("cursor_mailbox_id")
@@ -219,13 +273,27 @@ class Sender:
             payload.pop("replyTo")
         if not payload["attachments"]:
             payload.pop("attachments")
+        if db.is_suppressed(recipient["email"]):
+            db.mark_suppressed(recipient["id"])
+            db.add_event(campaign["id"], f"Skipped {recipient['email']}. That address is unsubscribed.")
+            return "next"
+        token = db.unsub_token_for(recipient["id"])
+        html_foot, text_foot = message_footer(campaign, token)
+        payload["html"] = html + html_foot
+        payload["text"] = text + text_foot
         db.update_campaign(
             campaign["id"],
+            step="sending",
             phase=f"Sending {recipient['email']} via {box['label']}",
             cursor_mailbox_id=box["id"],
         )
         try:
-            data = google_send.send(box["web_app_url"], box["token"], payload)
+            data = google_send.send(
+                box["web_app_url"],
+                box["token"],
+                payload,
+                box.get("script_style") or "app",
+            )
         except Exception as exc:
             data = {"ok": False, "code": "TRANSIENT", "message": str(exc)}
 
@@ -266,7 +334,7 @@ class Sender:
 
         if code == "RATE_LIMIT":
             self._sleep(campaign["id"], 10, "Waiting 10s so the next mailbox is not hit at once.")
-        db.mark_failed(recipient["id"], attempts, message)
+        db.mark_failed(recipient["id"], attempts, message, box["id"])
         db.add_event(
             campaign["id"],
             f"Skipped {recipient['email']}: {message}. It is in Failed and can be retried.",
@@ -294,10 +362,24 @@ class Sender:
                 return True
             left = max(0, int(end - time.time()))
             if left != last_shown:
-                db.update_campaign(campaign_id, phase=f"{label} {left}s")
+                db.update_campaign(campaign_id, step="waiting", phase=f"{label} {left}s")
                 last_shown = left
             time.sleep(min(0.25, max(0.0, end - time.time())))
         return not self._stop.is_set()
+
+
+def message_footer(campaign: dict, token: str) -> tuple:
+    base = db.get_setting("public_base_url", "").strip().rstrip("/")
+    if base and token:
+        url = f"{base}/u/{token}"
+        html = f'<p style="margin-top:24px;font-size:12px"><a href="{url}">Unsubscribe</a></p>'
+        return html, f"\n\nUnsubscribe: {url}"
+    reply = (campaign.get("reply_to") or "").strip()
+    if reply:
+        link = f"mailto:{reply}?subject=unsubscribe"
+        html = f'<p style="margin-top:24px;font-size:12px"><a href="{link}">Unsubscribe</a></p>'
+        return html, f"\n\nUnsubscribe: {link}"
+    return "", ""
 
 
 def _attachment_payload(campaign_id: int) -> list[dict]:
