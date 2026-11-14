@@ -66,7 +66,7 @@ async function api(path, options = {}) {
 
 function parseRoute() {
   const parts = (location.hash.replace(/^#/, "") || "/").split("/").filter(Boolean);
-  const pages = ["mailboxes", "campaigns", "activity", "subscribers", "queues", "deliverability", "media", "offers", "settings", "suppression"];
+  const pages = ["mailboxes", "campaigns", "activity", "subscribers", "groups", "segments", "queues", "deliverability", "media", "offers", "settings", "suppression", "admin"];
   if (parts[0] === "campaigns" && parts[1]) return { name: "campaign", campaignId: Number(parts[1]) };
   if (pages.includes(parts[0])) return { name: parts[0] };
   return { name: "overview" };
@@ -79,7 +79,11 @@ function setHeader(crumb, title) {
 }
 
 function applyRoute(route) {
-  const page = route.name === "suppression" ? "subscribers" : route.name;
+  if (route.name === "admin") {
+    location.hash = "#/";
+    return;
+  }
+  const page = ["suppression", "groups", "segments"].includes(route.name) ? "subscribers" : route.name;
   document.querySelectorAll("[data-page]").forEach((section) => {
     section.hidden = section.dataset.page !== page;
   });
@@ -93,7 +97,10 @@ function applyRoute(route) {
     campaigns: ["Campaigns", "All campaigns"],
     campaign: ["Campaigns", "Campaign"],
     subscribers: ["Audience", "Contacts"],
+    groups: ["Audience", "Lists & groups"],
+    segments: ["Audience", "Segments"],
     suppression: ["Audience", "Suppression"],
+    admin: ["Administration", "Companies"],
     queues: ["Sending", "Queues"],
     deliverability: ["Analytics", "Reports"],
     activity: ["Analytics", "Activity"],
@@ -110,10 +117,8 @@ function applyRoute(route) {
   setHeader(copy[0], copy[1]);
   document.body.classList.remove("nav-open");
   if (route.campaignId) selectedId = route.campaignId;
-  if (route.name === "suppression") {
-    const anchor = $("suppression-anchor");
-    if (anchor) requestAnimationFrame(() => anchor.scrollIntoView({ block: "start" }));
-  }
+  const anchor = { suppression: "suppression-anchor", groups: "audience-groups", segments: "audience-segments" }[route.name];
+  if (anchor && $(anchor)) requestAnimationFrame(() => $(anchor).scrollIntoView({ block: "start" }));
 }
 
 function campaignFields() {
@@ -191,7 +196,8 @@ function paint(data, route) {
   const running = data.campaigns.some((row) => row.status === "running");
   const paused = data.campaigns.some((row) => row.status === "paused");
   const now = new Date();
-  text($("overview-clock"), now.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }));
+  text($("overview-clock"), now.toLocaleDateString(undefined, { weekday: "long", month: "long", day: "numeric" }));
+  text($("hero-hello"), greetingLine());
   paintNotices(data);
   if (route && route.name === "campaign" && data.campaign) setHeader("Campaigns", campaignLabel(data.campaign));
 
@@ -203,23 +209,26 @@ function paint(data, route) {
   text($("stat-remaining-detail"), data.capacity.checked
     ? `${data.capacity.checked} mailbox${data.capacity.checked === 1 ? "" : "es"} checked`
     : "Refresh a mailbox to read Google");
-  text($("stat-enabled"), String(data.capacity.enabled));
+  bumpNumber($("stat-enabled"), data.capacity.enabled);
   text($("stat-enabled-detail"), `${data.mailboxes.length} added · ${off} off`);
   const today = data.today || { sent: 0, failed: 0 };
   const sendingCount = data.campaigns.filter((row) => row.status === "running").length;
   const pausedCount = data.campaigns.filter((row) => row.status === "paused").length;
   text($("stat-queued"), String(queued));
   text($("stat-queued-detail"), queued ? "Waiting to send" : "Your queue is currently empty");
-  text($("stat-sent"), String(today.sent));
-  text($("stat-sent-detail"), `${sent} sent in total`);
+  bumpNumber($("stat-sent"), today.sent);
+  text($("stat-sent-detail"), `${sent} accepted in total · ${failed} failed`);
   text($("stat-failed"), String(failed));
-  $("failed-card").classList.toggle("attention", failed > 0);
-  text($("stat-campaigns"), String(sendingCount + pausedCount));
+  const failedCard = $("failed-card");
+  if (failedCard) failedCard.classList.toggle("attention", failed > 0);
+  bumpNumber($("stat-campaigns"), sendingCount + pausedCount);
   const people = data.audience ? data.audience.total : 0;
   const groups = (data.groups || []).length;
-  text($("stat-campaigns-detail"), data.campaigns.length
-    ? `${data.campaigns.length} campaigns · ${people} contacts · ${groups} groups`
-    : `${people} contacts · ${groups} groups`);
+  text($("stat-campaigns-detail"), `${data.campaigns.length} saved · ${pausedCount} paused`);
+  bumpNumber($("stat-contacts"), people);
+  text($("stat-contacts-detail"), groups ? `${groups} groups` : "No groups yet");
+  paintSentSpark(data.series || []);
+  paintHeroViz(data.series || []);
   text($("system-state"), running ? "Sending" : paused ? "Paused" : "Idle");
   text($("system-mailboxes"), String(data.capacity.enabled));
   text($("system-running"), String(sendingCount));
@@ -454,8 +463,9 @@ function paintResults(list, rows) {
 }
 
 function paintDonut(queued, sent, failed) {
-  const total = queued + sent + failed;
   const donut = $("donut");
+  if (!donut) return;
+  const total = queued + sent + failed;
   text($("donut-center"), String(total));
   if (!total) {
     donut.style.background = "conic-gradient(#eef1f3 0 100%)";
@@ -539,7 +549,7 @@ function paintOverviewCampaignTable(rows) {
       tr.appendChild(td);
     }
     const when = document.createElement("td");
-    when.textContent = row.last_event ? clockTime(row.last_event) : "—";
+    when.textContent = row.created_at ? new Date(row.created_at).toLocaleDateString() : "—";
     tr.appendChild(when);
     const actions = document.createElement("td");
     const wrap = document.createElement("div");
@@ -558,45 +568,78 @@ function paintOverviewCampaignTable(rows) {
 }
 
 function paintOverviewMailboxTable(rows) {
-  const body = $("overview-mailbox-table");
-  body.replaceChildren();
+  const grid = $("mailbox-health");
+  if (!grid) return;
+  grid.replaceChildren();
   if (!rows.length) {
-    const tr = document.createElement("tr");
-    const td = document.createElement("td");
-    td.colSpan = 7;
-    td.textContent = "No mailboxes yet.";
-    tr.appendChild(td);
-    body.appendChild(tr);
+    const empty = document.createElement("p");
+    empty.className = "empty-note";
+    empty.textContent = "No mailboxes yet.";
+    grid.appendChild(empty);
     return;
   }
-  for (const box of rows) {
-    const tr = document.createElement("tr");
+  rows.forEach((box, index) => {
+    const card = document.createElement("article");
+    card.className = "health-card";
+    const cap = dailyCap(box);
+    const known = box.quotaRemaining != null;
+    const left = known ? Number(box.quotaRemaining) : 0;
+    const used = known ? Math.max(0, Math.min(cap, cap - left)) : 0;
+    const ratio = known && cap ? used / cap : 0;
+    const state = !box.enabled ? "Disabled" : box.lastError || box.status === "Error" ? "Error" : "Connected";
+    card.appendChild(quotaRing(ratio, known, index));
+    const body = document.createElement("div");
+    const name = document.createElement("strong");
+    name.textContent = box.email || box.label;
+    const meta = document.createElement("p");
+    meta.className = "hint";
     const kind = box.accountKind === "workspace" ? "Workspace" : "Gmail";
-    const cells = [
-      box.label + (box.practice ? " (practice)" : ""),
-      kind,
-      box.enabled ? "Enabled" : "Off",
-      box.quotaRemaining == null ? "—" : String(box.quotaRemaining),
-      String(dailyCap(box)),
-      box.lastError || "",
-    ];
-    for (const value of cells) {
-      const td = document.createElement("td");
-      td.textContent = value;
-      tr.appendChild(td);
+    const server = box.server ? ` · ${box.server}` : "";
+    meta.textContent = `${state} · ${kind}${box.practice ? " · practice" : ""}${server}`;
+    const quota = document.createElement("p");
+    quota.className = "hint";
+    quota.textContent = known ? `${left} remaining of ${cap}` : "Quota has not been read yet";
+    body.append(name, meta, quota);
+    if (box.lastError) {
+      const error = document.createElement("p");
+      error.className = "hint";
+      error.textContent = box.lastError;
+      body.appendChild(error);
     }
-    const actions = document.createElement("td");
-    const wrap = document.createElement("div");
-    wrap.className = "row";
-    wrap.append(
-      miniButton(box.enabled ? "Disable" : "Enable", () => changeBox(box.id, { enabled: !box.enabled })),
-      miniButton("Refresh", () => refreshBox(box.id)),
-      miniButton("Remove", () => removeBox(box.id))
-    );
-    actions.appendChild(wrap);
-    tr.appendChild(actions);
-    body.appendChild(tr);
-  }
+    card.appendChild(body);
+    grid.appendChild(card);
+  });
+}
+
+function quotaRing(ratio, known, index) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 72 72");
+  svg.setAttribute("class", "ring-svg");
+  const track = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  track.setAttribute("cx", "36");
+  track.setAttribute("cy", "36");
+  track.setAttribute("r", "28");
+  track.setAttribute("fill", "none");
+  track.setAttribute("stroke", "#d7e4f2");
+  track.setAttribute("stroke-width", "8");
+  const arc = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  const length = 2 * Math.PI * 28;
+  arc.setAttribute("cx", "36");
+  arc.setAttribute("cy", "36");
+  arc.setAttribute("r", "28");
+  arc.setAttribute("fill", "none");
+  arc.setAttribute("stroke", known ? `url(#sendora-ring-${index})` : "#94a3b8");
+  arc.setAttribute("stroke-width", "8");
+  arc.setAttribute("stroke-linecap", "round");
+  arc.setAttribute("stroke-dasharray", `${known ? length * ratio : 8} ${length}`);
+  arc.setAttribute("transform", "rotate(-90 36 36)");
+  const defs = document.createElementNS("http://www.w3.org/2000/svg", "defs");
+  const grad = document.createElementNS("http://www.w3.org/2000/svg", "linearGradient");
+  grad.setAttribute("id", `sendora-ring-${index}`);
+  grad.innerHTML = '<stop offset="0" stop-color="#168BFF"/><stop offset="1" stop-color="#20D4E8"/>';
+  defs.appendChild(grad);
+  svg.append(defs, track, arc);
+  return svg;
 }
 
 function paintQuotaBars(rows) {
@@ -758,11 +801,19 @@ function paintActivity(series) {
   const path = (key) => slice.map((row, index) => `${index ? "L" : "M"}${x(index)},${y(row[key])}`).join(" ");
   svg.replaceChildren();
   const ns = "http://www.w3.org/2000/svg";
+  const defs = document.createElementNS(ns, "defs");
+  defs.innerHTML = '<linearGradient id="sent-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#168BFF" stop-opacity="0.35"/><stop offset="1" stop-color="#168BFF" stop-opacity="0"/></linearGradient>';
+  svg.appendChild(defs);
   const grid = document.createElementNS(ns, "path");
   grid.setAttribute("d", `M${pad.l},${pad.t} V${height - pad.b} H${width - pad.r}`);
   grid.setAttribute("fill", "none");
   grid.setAttribute("stroke", "#E5E9ED");
   svg.appendChild(grid);
+  const sentArea = document.createElementNS(ns, "path");
+  const area = `${path("sent")} L${x(slice.length - 1)},${height - pad.b} L${x(0)},${height - pad.b} Z`;
+  sentArea.setAttribute("d", area);
+  sentArea.setAttribute("fill", "url(#sent-fill)");
+  svg.appendChild(sentArea);
   for (const [key, color] of [["sent", "#0866D9"], ["failed", "#D95B5B"]]) {
     const line = document.createElementNS(ns, "path");
     line.setAttribute("d", path(key));
@@ -821,7 +872,100 @@ function paintAttention(data) {
 }
 
 function paintOverviewLog(rows) {
-  paintFeed($("overview-log"), rows, 8);
+  const log = $("overview-log");
+  if (!log) return;
+  log.replaceChildren();
+  rows.slice(0, 8).forEach((row, index, list) => {
+    const described = describeEvent(row.message);
+    const item = document.createElement("article");
+    item.className = "timeline-item";
+    const rail = document.createElement("div");
+    rail.className = "timeline-rail";
+    rail.innerHTML = `<i></i>${index < list.length - 1 ? "<b></b>" : ""}`;
+    const body = document.createElement("div");
+    const title = document.createElement("strong");
+    title.textContent = described.title;
+    const detail = document.createElement("p");
+    detail.className = "hint";
+    detail.textContent = described.detail || row.message;
+    const time = document.createElement("time");
+    time.dateTime = row.created_at || "";
+    time.textContent = row.created_at ? new Date(row.created_at).toLocaleString() : "";
+    body.append(title, detail, time);
+    item.append(rail, body);
+    log.appendChild(item);
+  });
+}
+
+function paintSentSpark(series) {
+  const svg = $("spark-sent");
+  const trend = $("stat-sent-trend");
+  if (!svg || !trend) return;
+  const days = (series || []).slice(-14);
+  const yesterday = days.length > 1 ? days[days.length - 2] : null;
+  const today = days.length ? days[days.length - 1] : null;
+  const hasHistory = yesterday && today && (Number(yesterday.sent) || Number(today.sent));
+  trend.hidden = !hasHistory;
+  if (hasHistory) {
+    const delta = Number(today.sent) - Number(yesterday.sent);
+    trend.textContent = delta === 0 ? "Same as yesterday" : delta > 0 ? `${delta} more than yesterday` : `${Math.abs(delta)} fewer than yesterday`;
+  }
+  svg.replaceChildren();
+  if (!days.some((row) => Number(row.sent))) return;
+  const max = Math.max(1, ...days.map((row) => Number(row.sent || 0)));
+  const step = 120 / days.length;
+  days.forEach((row, index) => {
+    const height = (Number(row.sent || 0) / max) * 30;
+    const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+    rect.setAttribute("x", String(index * step + 1));
+    rect.setAttribute("y", String(34 - height));
+    rect.setAttribute("width", String(Math.max(2, step - 2)));
+    rect.setAttribute("height", String(Math.max(height, Number(row.sent) ? 2 : 0)));
+    rect.setAttribute("rx", "2");
+    rect.setAttribute("fill", "#0866D9");
+    svg.appendChild(rect);
+  });
+}
+
+function paintHeroViz(series) {
+  const svg = $("hero-viz");
+  if (!svg) return;
+  const days = (series || []).slice(-7);
+  svg.replaceChildren();
+  const ns = "http://www.w3.org/2000/svg";
+  if (!days.some((row) => Number(row.sent) || Number(row.failed))) {
+    const label = document.createElementNS(ns, "text");
+    label.setAttribute("x", "20");
+    label.setAttribute("y", "96");
+    label.setAttribute("fill", "#d7e8ff");
+    label.setAttribute("font-size", "14");
+    label.textContent = "No accepted sends yet";
+    svg.appendChild(label);
+    return;
+  }
+  const max = Math.max(1, ...days.map((row) => Number(row.sent || 0) + Number(row.failed || 0)));
+  days.forEach((row, index) => {
+    const sent = Number(row.sent || 0);
+    const failed = Number(row.failed || 0);
+    const sentH = (sent / max) * 110;
+    const failedH = (failed / max) * 110;
+    const x = 24 + index * 40;
+    const sentBar = document.createElementNS(ns, "rect");
+    sentBar.setAttribute("x", String(x));
+    sentBar.setAttribute("y", String(140 - sentH));
+    sentBar.setAttribute("width", "18");
+    sentBar.setAttribute("height", String(sentH));
+    sentBar.setAttribute("rx", "4");
+    sentBar.setAttribute("fill", "#20D4E8");
+    const failedBar = document.createElementNS(ns, "rect");
+    failedBar.setAttribute("x", String(x));
+    failedBar.setAttribute("y", String(140 - sentH - failedH));
+    failedBar.setAttribute("width", "18");
+    failedBar.setAttribute("height", String(failedH));
+    failedBar.setAttribute("rx", "4");
+    failedBar.setAttribute("fill", "#D95B5B");
+    svg.append(sentBar, failedBar);
+  });
 }
 
 let mailboxRows = [];
@@ -1642,8 +1786,11 @@ async function tick() {
     $("header-search").hidden = admin;
     $("search-open").hidden = admin;
     $("user-settings").hidden = admin;
+    $("side-settings").hidden = admin;
     paintAccount(me);
+    document.querySelector(".brand").setAttribute("href", admin ? "#/admin" : "#/");
     if (admin) {
+      document.querySelectorAll("#admin-nav .nav-link").forEach((link) => link.classList.add("active"));
       document.querySelectorAll("[data-page]").forEach((section) => {
         section.hidden = section.dataset.page !== "admin";
       });
@@ -3744,16 +3891,30 @@ function paintCommands(query) {
 
 let searchSerial = 0;
 
+let accountName = "";
+
+function greetingLine() {
+  const hour = new Date().getHours();
+  const hello = hour < 12 ? "Good morning" : hour < 18 ? "Good afternoon" : "Good evening";
+  const first = accountName.trim().split(/\s+/)[0];
+  return first ? `${hello}, ${first}` : hello;
+}
+
 function paintAccount(me) {
   const user = me.user || {};
   const name = user.name || user.email || "Account";
+  accountName = user.name || "";
   text($("user-name"), name);
   text($("user-email"), user.email || "");
   const role = user.role === "super_admin" ? "Super admin" : "Company user";
   const company = me.company && me.company.name ? me.company.name : "";
   text($("user-meta"), company ? `${role} · ${company}` : role);
   const parts = name.trim().split(/\s+/).slice(0, 2);
-  text($("user-initials"), parts.map((part) => part[0] || "").join("").toUpperCase() || "—");
+  const initials = parts.map((part) => part[0] || "").join("").toUpperCase() || "—";
+  text($("user-initials"), initials);
+  text($("side-initials"), initials);
+  text($("side-name"), name);
+  text($("side-role"), company ? `${role} · ${company}` : role);
 }
 
 function noticeItems(data) {
@@ -3849,10 +4010,32 @@ function paintSearch(query) {
   }).catch(() => {});
 }
 
+if (localStorage.getItem("sendora-sidebar") === "collapsed") document.body.classList.add("sidebar-collapsed");
+$("side-collapse").addEventListener("click", () => {
+  const collapsed = document.body.classList.toggle("sidebar-collapsed");
+  localStorage.setItem("sendora-sidebar", collapsed ? "collapsed" : "expanded");
+});
+$("side-account").addEventListener("click", (event) => {
+  event.stopPropagation();
+  $("side-menu").hidden = !$("side-menu").hidden;
+});
 $("nav-toggle").addEventListener("click", () => document.body.classList.toggle("nav-open"));
 $("header-refresh").addEventListener("click", () => tick());
 $("more-refresh").addEventListener("click", () => { $("more-panel").hidden = true; tick(); });
 $("header-create").addEventListener("click", () => $("campaign-new").click());
+for (const id of ["hero-create", "quick-create"]) {
+  $(id).addEventListener("click", () => $("campaign-new").click());
+}
+for (const id of ["hero-mailbox", "quick-mailbox"]) {
+  $(id).addEventListener("click", () => {
+    location.hash = "#/mailboxes";
+    showMailboxTab("add");
+  });
+}
+$("quick-import").addEventListener("click", () => {
+  location.hash = "#/subscribers";
+  $("import-open").click();
+});
 $("more-create").addEventListener("click", () => { $("more-panel").hidden = true; $("header-create").click(); });
 $("menu-logout").addEventListener("click", () => $("logout").click());
 $("notify-toggle").addEventListener("click", (event) => { event.stopPropagation(); toggleHeaderPanel("notify-panel"); });
@@ -3870,6 +4053,8 @@ document.addEventListener("click", (event) => {
     const panel = $(id);
     if (panel && !panel.parentElement.contains(event.target)) panel.hidden = true;
   }
+  const sideMenu = $("side-menu");
+  if (sideMenu && !$("side-foot").contains(event.target)) sideMenu.hidden = true;
 });
 for (const id of ["campaign-filter", "campaign-status-filter", "campaign-sort"]) {
   $(id).addEventListener("input", () => paintOverviewCampaignTable(overviewCampaigns));
@@ -3894,6 +4079,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     $("command").hidden = true;
     $("notify-panel").hidden = true;
+    $("side-menu").hidden = true;
     $("user-panel").hidden = true;
     $("more-panel").hidden = true;
     $("search-results").hidden = true;

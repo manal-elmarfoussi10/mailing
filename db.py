@@ -1511,10 +1511,11 @@ def recent_events(limit: int = 8) -> list:
         """
         SELECT campaign_id, created_at, message
         FROM events
+        WHERE company_id = ?
         ORDER BY id DESC
         LIMIT ?
         """,
-        (limit,),
+        (current_company(), limit),
     )
 
 
